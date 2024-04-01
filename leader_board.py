@@ -11,6 +11,10 @@ import pufferlib.emulation
 from nmmo.core.realm import Realm
 from nmmo.lib.log import EventCode
 import nmmo.systems.item as Item
+import nmmo
+from nmmo.entity.entity import Entity
+
+DISABLE_SCORE_HIT = False
 
 
 @dataclass
@@ -159,7 +163,7 @@ class StatPostprocessor(pufferlib.emulation.Postprocessor):
         self._last_moves = []
         self._last_price = 0
 
-    def _update_stats(self, agent):
+    def _update_stats(self, agent: Entity):
         task = self.env.agent_task_map[agent.ent_id][0]
         # For each task spec, record whether its max progress and reward count
         self._curriculum[task.spec_name].append(
@@ -218,6 +222,7 @@ class StatPostprocessor(pufferlib.emulation.Postprocessor):
 
     def reward_done_info(self, reward, done, info):
         """Update stats + info and save replays."""
+        self.env: nmmo.Env
 
         # Remove the task from info. Curriculum info is processed in _update_stats()
         info.pop("task", None)
@@ -237,7 +242,7 @@ class StatPostprocessor(pufferlib.emulation.Postprocessor):
         if "stats" not in info:
             info["stats"] = {}
 
-        agent = self.env.realm.players.dead_this_tick.get(
+        agent: Entity = self.env.realm.players.dead_this_tick.get(
             self.agent_id, self.env.realm.players.get(self.agent_id)
         )
         assert agent is not None
@@ -431,6 +436,13 @@ def extract_unique_event(log, attr_to_col):
     log[idx, attr_to_col["number"]] = log[
         idx, attr_to_col["tick"]
     ].copy()  # this is a hack
+
+    if DISABLE_SCORE_HIT:
+        return set(
+            tuple(row)
+            for row in log[:, attr_to_col["event"] :]
+            if row[0] != EventCode.SCORE_HIT
+        )
 
     # return unique events after masking
     return set(tuple(row) for row in log[:, attr_to_col["event"] :])

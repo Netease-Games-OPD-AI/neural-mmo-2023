@@ -18,7 +18,7 @@ from nmmo.render.replay_helper import FileReplayHelper
 from nmmo.task.task_spec import make_task_from_spec
 
 import pufferlib
-from pufferlib.vectorization import Serial, Multiprocessing
+from pufferlib.vectorization import Serial, Multiprocessing, Ray
 from pufferlib.policy_store import DirectoryPolicyStore
 from pufferlib.frameworks import cleanrl
 import pufferlib.policy_ranker
@@ -203,7 +203,7 @@ class AllPolicySelector(pufferlib.policy_ranker.PolicySelector):
         return [next(loop) for _ in range(self._num)]
 
 
-def rank_policies(policy_store_dir, eval_curriculum_file, device):
+def rank_policies(policy_store_dir, eval_curriculum_file, device, debug=False):
     # CHECK ME: can be custom models with different architectures loaded here?
     policy_store = setup_policy_store(policy_store_dir)
     policy_ranker = create_policy_ranker(policy_store_dir)
@@ -213,13 +213,15 @@ def rank_policies(policy_store_dir, eval_curriculum_file, device):
     args = SimpleNamespace(**config.Config.asdict())
     args.data_dir = policy_store_dir
     args.eval_mode = True
-    args.num_envs = 5  # sample a bit longer in each env
+    args.num_envs = 1 if debug else 5  # sample a bit longer in each env
     args.num_buffers = 1
     args.learner_weight = 0  # evaluate mode
     args.selfplay_num_policies = num_policies + 1
     args.early_stop_agent_num = 0  # run the full episode
     args.resilient_population = 0  # no resilient agents
     args.tasks_path = eval_curriculum_file  # task-conditioning
+    args.use_ray_vecenv = False if debug else True
+    args.debug_print_events = debug
 
     # NOTE: This creates a dummy learner agent. Is it necessary?
     from reinforcement_learning import policy  # import your policy
@@ -241,7 +243,11 @@ def rank_policies(policy_store_dir, eval_curriculum_file, device):
         env_creator_kwargs={},
         agent_creator=make_policy,
         data_dir=policy_store_dir,
-        vectorization=Multiprocessing,
+        vectorization=(
+            Serial
+            if args.use_serial_vecenv
+            else (Ray if args.use_ray_vecenv else Multiprocessing)
+        ),
         num_envs=args.num_envs,
         num_cores=args.num_envs,
         num_buffers=args.num_buffers,
@@ -367,6 +373,11 @@ if __name__ == "__main__":
         default=None,
         help="The index of the task to assign in the curriculum file",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Debug mode (Default: False). Print events.",
+    )
 
     # Parse and check the arguments
     eval_args = parser.parse_args()
@@ -387,4 +398,9 @@ if __name__ == "__main__":
     else:
         logging.info("Ranking checkpoints from %s", eval_args.policy_store_dir)
         logging.info("Replays will NOT be generated")
-        rank_policies(eval_args.policy_store_dir, eval_args.task_file, eval_args.device)
+        rank_policies(
+            eval_args.policy_store_dir,
+            eval_args.task_file,
+            eval_args.device,
+            eval_args.debug,
+        )

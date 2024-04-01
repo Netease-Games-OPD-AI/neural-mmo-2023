@@ -26,19 +26,25 @@ class Config:
     runs_dir = "/tmp/runs"  # Directory for runs
     policy_store_dir = None  # Policy store directory
     use_serial_vecenv = False  # Use serial vecenv implementation
+    use_ray_vecenv = False  # Use ray vecenv implementation
     learner_weight = 1.0  # Weight of learner policy
     max_opponent_policies = 0  # Maximum number of opponent policies to train against
     eval_num_policies = 2  # Number of policies to use for evaluation
     eval_num_rounds = 1  # Number of rounds to use for evaluation
     wandb_project = None  # WandB project name
     wandb_entity = None  # WandB entity name
+    as_fine_tune = False
 
     # PPO Args
     bptt_horizon = 8  # Train on this number of steps of a rollout at a time. Used to reduce GPU memory.
     ppo_training_batch_size = 128  # Number of rows in a training batch
     ppo_update_epochs = 3  # Number of update epochs to use for training
     ppo_learning_rate = 0.00015  # Learning rate
+    weight_decay = 0.0  # Adam's weight_decay parameter
     clip_coef = 0.1  # PPO clip coefficient
+    no_clip_vloss = False  # Whether to disable clip value loss
+    ent_coef = 0.01  # Policy entropy coefficient
+    vf_coef = 0.5  # Value function coefficient
 
     # Environment Args
     num_agents = 128  # Number of agents to use for training
@@ -52,6 +58,7 @@ class Config:
         0.2  # Percentage of agents to be resilient to starvation/dehydration
     )
     tasks_path = None  # Path to tasks to use for training
+    task_reward_setting_path = None  # Customized reward settings for different tasks
     eval_mode = False  # Run the postprocessor in the eval mode
     early_stop_agent_num = (
         8  # Stop the episode when the number of agents reaches this number
@@ -60,9 +67,13 @@ class Config:
     heal_bonus_weight = 0.03
     meander_bonus_weight = 0.02
     explore_bonus_weight = 0.01
+    task_learning_bonus_weight = 0.0  # weight for task_reward_setting_path's rewards
+    alive_bonus_weight = 0.0
     spawn_immunity = 20
+    adjust_ori_reward = False
 
     # Policy Args
+    model = "Baseline"  # Name of model class
     input_size = 256
     hidden_size = 256
     num_lstm_layers = 0  # Number of LSTM layers to use
@@ -71,6 +82,9 @@ class Config:
     attend_task = "none"  # Attend task - options: none, pytorch, nikhil
     attentional_decode = True  # Use attentional action decoder
     extra_encoders = True  # Use inventory and market encoders
+
+    # Debug
+    debug_print_events = False
 
     @classmethod
     def asdict(cls):

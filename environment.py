@@ -1,11 +1,54 @@
+from typing import Dict, List, Optional
+from nmmo.task.task_spec import TaskSpec
+import numpy as np
+import dill
+import json
+from types import SimpleNamespace
+
 from argparse import Namespace
 import math
+import copy
 
 import nmmo
+from nmmo.lib.log import EventCode
+from nmmo.core.observation import Observation
+from nmmo.systems.skill import Skills
+from nmmo.entity.entity import Entity
+
 import pufferlib
 import pufferlib.emulation
 
 from leader_board import StatPostprocessor, calculate_entropy
+
+_DEBUG_TASK_REWARD = False
+_DEBUG_TASK_SETTING = {}  # {"harvest": {"Fishing": 0.01}}
+
+_EVENTS = [
+    "EAT_FOOD",
+    "DRINK_WATER",
+    "GO_FARTHEST",
+    "SCORE_HIT",
+    "PLAYER_KILL",
+    "CONSUME_ITEM",
+    "GIVE_ITEM",
+    "DESTROY_ITEM",
+    "HARVEST_ITEM",
+    "EQUIP_ITEM",
+    "LOOT_ITEM",
+    "GIVE_GOLD",
+    "LIST_ITEM",
+    "EARN_GOLD",
+    "BUY_ITEM",
+    "LEVEL_UP",
+]
+EVENTCODE_TO_EVENT = {getattr(EventCode, _): _ for _ in _EVENTS}
+_COLS = [
+    "type",
+    "level",
+    "number",
+    "gold",
+    "target_ent",
+]
 
 
 class Config(nmmo.config.Default):
@@ -45,7 +88,13 @@ class Postprocessor(StatPostprocessor):
         heal_bonus_weight=0,
         meander_bonus_weight=0,
         explore_bonus_weight=0,
+        task_learning_bonus_weight=0,
+        alive_bonus_weight=0,
         clip_unique_event=3,
+        adjust_ori_reward=False,
+        train_tasks_info=None,
+        task_reward_settings=None,
+        debug_print_events=False,
     ):
         super().__init__(env, agent_id, eval_mode)
         self.early_stop_agent_num = early_stop_agent_num
@@ -55,9 +104,52 @@ class Postprocessor(StatPostprocessor):
         self.explore_bonus_weight = explore_bonus_weight
         self.clip_unique_event = clip_unique_event
 
+        self.adjust_ori_reward = adjust_ori_reward
+
+        self.debug_print_events = debug_print_events
+
+        self.alive_bonus_weight = alive_bonus_weight
+
+        # Customized task reward
+        self.train_tasks_info = train_tasks_info
+        self._task_index: Optional[int] = (
+            None  # The index of the current task in `train_tasks_info`
+        )
+        self.task_learning_bonus_weight = task_learning_bonus_weight
+        self.task_reward_settings = task_reward_settings
+        self.task_reward_setting: Optional[Dict] = None
+
+        self.prev_done = False
+
+    def _reset_task_reward_state(self) -> None:
+        self._seen_tiles = {
+            "co": set(),  # collection of coordinates
+            "last_update_tick": 0,
+        }
+
+        self._been_tiles = {  # tiles visited
+            "co": set(),
+            "last_update_tick": 0,
+        }
+
+        self._last_damage_inflicted = 0
+
+        self._last_harvest_skill_exp = 0
+
+        self._history_own = {}  # The highest ownership record in history
+
     def reset(self, obs):
         """Called at the start of each episode"""
         super().reset(obs)
+
+        self.prev_done = False
+
+        if self.task_learning_bonus_weight:
+            self._update_task_index(obs["Task"])
+            self._reset_task_reward_state()
+
+            setting = self._get_task_reward_setting()
+            self.task_reward_setting = setting
 
     @property
     def observation_space(self):
@@ -80,6 +172,10 @@ class Postprocessor(StatPostprocessor):
 
     def reward_done_info(self, reward, done, info):
         """Called on reward, done, and info before they are returned from the environment"""
+        self.env: nmmo.Env
+
+        if self.adjust_ori_reward:
+            reward = self._adjust_ori_reward(reward, done, info)
 
         # Stop early if there are too few agents generating the training data
         if len(self.env.agents) <= self.early_stop_agent_num:
@@ -92,39 +188,437 @@ class Postprocessor(StatPostprocessor):
 
         # Add "Healing" score based on health increase and decrease due to food and water
         healing_bonus = 0
-        if self.agent_id in self.env.realm.players:
+        if self.heal_bonus_weight and self.agent_id in self.env.realm.players:
             if self.env.realm.players[self.agent_id].resources.health_restore > 0:
                 healing_bonus = self.heal_bonus_weight
 
         # Add meandering bonus to encourage moving to various directions
         meander_bonus = 0
-        if len(self._last_moves) > 5:
+        if self.meander_bonus_weight and len(self._last_moves) > 5:
             move_entropy = calculate_entropy(self._last_moves[-8:])  # of last 8 moves
             meander_bonus = self.meander_bonus_weight * (move_entropy - 1)
 
         # Unique event-based rewards, similar to exploration bonus
         # The number of unique events are available in self._curr_unique_count, self._prev_unique_count
-        if self.sqrt_achievement_rewards:
-            explore_bonus = math.sqrt(self._curr_unique_count) - math.sqrt(
-                self._prev_unique_count
-            )
-        else:
-            explore_bonus = min(
-                self.clip_unique_event,
-                self._curr_unique_count - self._prev_unique_count,
-            )
-        explore_bonus *= self.explore_bonus_weight
+        explore_bonus = 0
+        if self.explore_bonus_weight:
+            if self.sqrt_achievement_rewards:
+                explore_bonus = math.sqrt(self._curr_unique_count) - math.sqrt(
+                    self._prev_unique_count
+                )
+            else:
+                explore_bonus = min(
+                    self.clip_unique_event,
+                    self._curr_unique_count - self._prev_unique_count,
+                )
+            explore_bonus *= self.explore_bonus_weight
+
+        alive_bonus = 0
+        if self.alive_bonus_weight and not done:
+            alive_bonus = self._get_alive_bonus()
+            alive_bonus *= self.alive_bonus_weight
+
+        task_learning_bonus = 0
+        if self.task_learning_bonus_weight and not done:
+            task_learning_bonus = self._get_task_learning_bonus()
+            task_learning_bonus *= self.task_learning_bonus_weight
+
+        if self.debug_print_events and done:
+            self._print_agent_all_events()
 
         reward = reward + explore_bonus + healing_bonus + meander_bonus
+        reward += alive_bonus
+        reward += task_learning_bonus
+
+        self.prev_done = done
 
         return reward, done, info
+
+    def _adjust_ori_reward(self, reward, done, info) -> float:
+        if not reward:
+            return reward
+
+        task_infos = list(info["task"].values())
+        assert len(task_infos) == 1
+        task_info = task_infos[0]
+
+        if reward == -1:
+            assert done
+            if task_info["completed"]:
+                return -0.1
+            else:
+                return -10.0
+
+        if reward == 1:
+            assert task_info["completed"]
+            return 10.0
+
+        return reward
+
+    @property
+    def _eval_fn_name(self):
+        return self.train_tasks_info.eval_fn_name[self._task_index]
+
+    @property
+    def _eval_fn_kwargs(self):
+        return self.train_tasks_info.eval_fn_kwargs[self._task_index]
+
+    def _update_task_index(self, task_embedding: np.ndarray) -> None:
+        """Use task embedding to find the task index"""
+        if self.eval_mode:
+            self._task_index = None
+            return
+
+        assert task_embedding.shape == (4096,)
+
+        # diff = self.train_tasks_info.embedding_mat - task_embedding
+        # diff = np.sum(diff**2, axis=-1)
+        # (indexes,) = np.where(diff == 0)
+
+        (indexes,) = np.where(
+            (self.train_tasks_info.embedding_mat == task_embedding).all(axis=1)
+        )
+
+        n_matched_task = len(indexes)
+        assert (
+            n_matched_task == 1
+        ), f"{n_matched_task} task match emb ({task_embedding})"
+
+        self._task_index = int(indexes[0])
+
+        assert self._task_index < self.train_tasks_info.n
+
+        # if _DEBUG_TASK_REWARD and self.agent_id <= 20:
+        #     print(
+        #         f"agent_id {self.agent_id}, task index {self._task_index}"
+        #         f", {self.train_tasks_info.eval_fn_name[self._task_index]}"
+        #         f", {self.train_tasks_info.eval_fn_kwargs[self._task_index]}"
+        #     )
+
+        return
+
+    def _get_task_reward_setting(self) -> Dict:
+        if _DEBUG_TASK_REWARD and _DEBUG_TASK_SETTING:
+            return _DEBUG_TASK_SETTING
+
+        _eval_fn_name = self._eval_fn_name
+        _eval_fn_kwargs = self._eval_fn_kwargs
+
+        if _eval_fn_name not in self.task_reward_settings:
+            # print(f"Reward of eval fn {_eval_fn_name} not set")
+            return {}
+
+        eval_fn_setting: Dict = self.task_reward_settings[_eval_fn_name]
+        try:
+            ret: Dict = eval_fn_setting[_eval_fn_kwargs[eval_fn_setting["_key"]]]
+        except:
+            ret: Dict = eval_fn_setting["_default"]
+
+        return ret
+
+    def _get_alive_bonus(self) -> float:
+        ret = 0
+
+        cur_tick = self.env.realm.tick
+        entity: Entity = self.env.realm.players.entities[self.agent_id]
+
+        health_lost = 100 - entity.health.val
+        if health_lost > 50:
+            ret += -(health_lost - 50) / 50 * 0.001
+
+        return ret
+
+    def _get_task_learning_bonus(self) -> float:
+        ret = 0
+
+        setting = self.task_reward_setting
+
+        for reward_type, args in setting.items():
+            if reward_type == "log":
+                _reward = self._task_log_bonus(args)
+            elif reward_type == "log_value":
+                _reward = self._task_log_bonus(args, use_value=True)
+            elif reward_type == "wander":
+                _reward = self._task_wander_bonus(args)
+            elif reward_type == "wander_occupy":
+                _reward = self._task_wander_occupy_bonus(args)
+            elif reward_type == "attack":
+                _reward = self._task_attack_bonus(args)
+            elif reward_type == "harvest":
+                _reward = self._task_harvest_bonus(args)
+            elif reward_type == "own":
+                _reward = self._task_own_bonus(args)
+            else:
+                raise Exception(f"Invalid reward type {reward_type}")
+
+            ret += _reward
+
+            # if _DEBUG_TASK_REWARD and _reward and self.agent_id <= 20:
+            #     print(
+            #         f"agent_id {self.agent_id}, current_tick {self.env.realm.tick}"
+            #         f", task learning bonus: type {reward_type}, setting {setting}, reward {_reward}"
+            #         f", # players remain {len(self.env.realm.players.entities)}"
+            #     )
+
+        return ret
+
+    def _task_log_bonus(self, args: Dict, use_value: bool = False) -> float:
+        """[TASK REWARD] Reward the agent for a specific log"""
+        ret = 0
+
+        assert args
+
+        cur_tick = self.env.realm.tick
+        cur_logs = self.env.realm.event_log.get_data(
+            agents=[self.agent_id], tick=cur_tick
+        )
+
+        attr_to_col = self.env.realm.event_log.attr_to_col
+
+        for line in cur_logs:
+            event_name = EVENTCODE_TO_EVENT.get(line[attr_to_col["event"]], "")
+
+            if event_name in args:
+                if use_value:
+                    if event_name == "EARN_GOLD":
+                        value = line[attr_to_col["gold"]]
+                    else:
+                        raise NotImplementedError(event_name)
+                    ret += args[event_name] * value
+                else:
+                    ret += args[event_name]
+
+        return ret
+
+    def _task_wander_bonus(self, args: Dict) -> float:
+        """[TASK REWARD]"""
+        ret = 0
+
+        per_tile = args["per_tile"]
+
+        obs: Observation = self.env.obs[self.agent_id]
+        current_tick = obs.current_tick
+        visible_tiles = obs.tiles
+
+        n_new_seen_tiles = 0
+        for tile in visible_tiles:
+            x, y, t = tile
+            if (x, y) not in self._seen_tiles["co"]:
+                n_new_seen_tiles += 1
+                self._seen_tiles["co"].add((x, y))
+        self._seen_tiles["last_update_tick"] = current_tick
+
+        if current_tick > 1:
+            ret += n_new_seen_tiles * per_tile
+
+        # if _DEBUG_TASK_REWARD and self.agent_id == 1:
+        #     print(
+        #         f"agent_id {self.agent_id}, current_tick {current_tick}"
+        #         f", n_new_seen_tiles {n_new_seen_tiles}"
+        #     )
+
+        return ret
+
+    def _task_wander_occupy_bonus(self, args: Dict) -> float:
+        """[TASK REWARD]"""
+        ret = 0
+
+        per_tile = args["per_tile"]
+
+        entity: Entity = self.env.realm.players.entities[self.agent_id]
+        current_tick = self.env.realm.tick
+
+        if entity.pos not in self._been_tiles["co"]:
+            self._been_tiles["co"].add(entity.pos)
+            if current_tick > 1:
+                ret += per_tile
+
+        self._been_tiles["last_update_tick"] = current_tick
+
+        # if _DEBUG_TASK_REWARD and self.agent_id == 1:
+        #     print(
+        #         f"agent_id {self.agent_id}, current_tick {current_tick}"
+        #         f", self._been_tiles {self._been_tiles}, +reward {ret}"
+        #     )
+
+        return ret
+
+    def _task_attack_bonus(self, args: Dict) -> float:
+        """[TASK REWARD]"""
+        ret = 0
+
+        entity = self.env.realm.players.entities[self.agent_id]
+        current_tick = self.env.realm.tick
+
+        if entity.history.damage_inflicted > self._last_damage_inflicted:
+            assert isinstance(entity.history.attack, dict)
+            attack_style = entity.history.attack["style"]
+            if attack_style in args:
+                ret += args[attack_style]
+
+            self._last_damage_inflicted = entity.history.damage_inflicted
+
+        # if _DEBUG_TASK_REWARD and self.agent_id == 1:
+        #     print(
+        #         f"agent_id {self.agent_id}, current_tick {current_tick}"
+        #         f", entity.history.attack {entity.history.attack}"
+        #         f", entity.history.damage_inflicted {entity.history.damage_inflicted}"
+        #     )
+
+        return ret
+
+    def _task_harvest_bonus(self, args: Dict) -> float:
+        """[TASK REWARD]"""
+        ret = 0
+
+        entity = self.env.realm.players.entities[self.agent_id]
+        skills: Skills = entity.skills
+        current_tick = self.env.realm.tick
+
+        skill_names = list(args.keys())
+        assert (
+            len(skill_names) == 1
+        ), f"harvest reward require 1 skill but get {len(skill_names)}"
+        skill_name = skill_names[0]
+
+        if skill_name == "Fishing":
+            skill = skills.fishing
+        elif skill_name == "Herbalism":
+            skill = skills.herbalism
+        elif skill_name == "Prospecting":
+            skill = skills.prospecting
+        elif skill_name == "Carving":
+            skill = skills.carving
+        elif skill_name == "Alchemy":
+            skill = skills.alchemy
+        else:
+            raise Exception(f"Invalid skill {skill_name}")
+
+        cur_skill_exp = skill.exp.val
+        exp_diff = cur_skill_exp - self._last_harvest_skill_exp
+        if exp_diff > 0:
+            ret += args[skill_name] * exp_diff
+            self._last_harvest_skill_exp = cur_skill_exp
+
+        # if _DEBUG_TASK_REWARD and self.agent_id <= 20:
+        #     print(
+        #         f"agent_id {self.agent_id}, current_tick {current_tick}"
+        #         f", skill {skill_name}, exp {cur_skill_exp}, exp_diff {exp_diff}"
+        #     )
+
+        return ret
+
+    def _task_own_bonus(self, args: Dict) -> float:
+        """[TASK REWARD]"""
+        ret = 0
+
+        entity: Entity = self.env.realm.players.entities[self.agent_id]
+        current_tick = self.env.realm.tick
+
+        packet = entity.inventory.packet()
+        for item in packet["items"]:
+            item_type = item["item"]
+            level = item["level"]
+            quantity = item["quantity"]
+
+            reward_coef = args.get(item_type, args.get("", 0.0))
+            if not reward_coef:
+                continue
+
+            if item_type not in self._history_own:
+                self._history_own[item_type] = {}
+            if level not in self._history_own[item_type]:
+                self._history_own[item_type][level] = 0
+
+            quantity_diff = quantity - self._history_own[item_type][level]
+
+            if quantity_diff > 0:
+                self._history_own[item_type][level] = quantity
+                ret += quantity_diff * level * reward_coef
+
+        # if _DEBUG_TASK_REWARD and ret:
+        #     print(
+        #         f"agent_id {self.agent_id}, current_tick {current_tick}"
+        #         f", _history_own {self._history_own}, +reward {ret}"
+        #     )
+
+        return ret
+
+    def _print_agent_all_events(self):
+        print(f"== agent_id {self.agent_id}'s logs ==")
+        log = self.env.realm.event_log.get_data(agents=[self.agent_id])
+        self._print_events_log(log, self.env.realm.event_log.attr_to_col)
+
+    @staticmethod
+    def _print_events_log(log, attr_to_col):
+        for line in log:
+            event_name = EVENTCODE_TO_EVENT.get(line[attr_to_col["event"]], "")
+            tick = line[attr_to_col["tick"]]
+            print(
+                f"tick {tick}, event {event_name}: "
+                + ", ".join([f"{_} {line[attr_to_col[_]]}" for _ in _COLS])
+            )
+
+
+def get_tasks_info_for_reward_setting(tasks_path: str) -> SimpleNamespace:
+    with open(tasks_path, "rb") as f:
+        curriculums: List[TaskSpec] = dill.load(f)
+
+    print(f"Load {len(curriculums)} train curriculums")
+
+    ret = SimpleNamespace(
+        embedding_mat=None,  # The matrix formed by concatenating all task embeddings
+        eval_fn_name=[],
+        eval_fn_kwargs=[],
+        n=0,
+    )
+
+    _mat = []
+
+    for curriculum in curriculums:
+        eval_fn_kwargs = {
+            key: value if isinstance(value, (str, int, float)) else value.__name__
+            for key, value in curriculum.eval_fn_kwargs.items()
+        }
+
+        _mat.append(curriculum.embedding)
+        ret.eval_fn_name.append(curriculum.eval_fn.__name__)
+        ret.eval_fn_kwargs.append(eval_fn_kwargs)
+        ret.n += 1
+
+    ret.embedding_mat = np.vstack(_mat)
+
+    return ret
+
+
+def load_task_reward_settings(path: str) -> Dict:
+    print(f"Load task reward setting {path}")
+    with open(path, "r") as f:
+        ret = json.load(f)
+    return ret
 
 
 def make_env_creator(args: Namespace):
     # TODO: Max episode length
+
+    use_task_reward = (
+        not args.eval_mode
+        and args.task_reward_setting_path
+        and args.task_learning_bonus_weight
+    )
+
+    train_tasks_info = (
+        get_tasks_info_for_reward_setting(args.tasks_path) if use_task_reward else None
+    )
+    task_reward_settings = (
+        load_task_reward_settings(args.task_reward_setting_path)
+        if use_task_reward
+        else None
+    )
+
     def env_creator():
         """Create an environment."""
-        env = nmmo.Env(Config(args))
+        env = nmmo.Env(Config(args), seed=args.seed)
         env = pufferlib.emulation.PettingZooPufferEnv(
             env,
             postprocessor_cls=Postprocessor,
@@ -135,6 +629,12 @@ def make_env_creator(args: Namespace):
                 "heal_bonus_weight": args.heal_bonus_weight,
                 "meander_bonus_weight": args.meander_bonus_weight,
                 "explore_bonus_weight": args.explore_bonus_weight,
+                "task_learning_bonus_weight": args.task_learning_bonus_weight,
+                "alive_bonus_weight": args.alive_bonus_weight,
+                "adjust_ori_reward": args.adjust_ori_reward,
+                "train_tasks_info": train_tasks_info,
+                "task_reward_settings": task_reward_settings,
+                "debug_print_events": args.debug_print_events,
             },
         )
         return env

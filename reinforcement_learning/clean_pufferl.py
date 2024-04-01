@@ -26,6 +26,29 @@ import pufferlib.policy_ranker
 import pufferlib.utils
 import pufferlib.vectorization
 
+TASK_EVAL_FN_NAMES = [
+    "CountEvent",
+    "CanSeeTile",
+    "AttainSkill",
+    "PracticeSkillWithTool",
+    "TickGE",
+    "OccupyTile",
+    "CanSeeAgent",
+    "CanSeeGroup",
+    "ScoreHit",
+    "HoardGold",
+    "EarnGold",
+    "SpendGold",
+    "MakeProfit",
+    "PracticeInventoryManagement",
+    "OwnItem",
+    "EquipItem",
+    "ConsumeItem",
+    "HarvestItem",
+    "ListItem",
+    "BuyItem",
+]
+
 
 def unroll_nested_dict(d):
     if not isinstance(d, dict):
@@ -58,6 +81,7 @@ class CleanPuffeRL:
     device: str = torch.device("cuda") if torch.cuda.is_available() else "cpu"
     total_timesteps: int = 10_000_000
     learning_rate: float = 2.5e-4
+    weight_decay: float = 0.0
     num_buffers: int = 1
     num_envs: int = 8
     num_cores: int = psutil.cpu_count(logical=False)
@@ -69,6 +93,8 @@ class CleanPuffeRL:
 
     policy_pool: pufferlib.policy_pool.PolicyPool = None
     policy_selector: pufferlib.policy_ranker.PolicySelector = None
+
+    as_fine_tune: bool = False
 
     # Wandb
     wandb_entity: str = None
@@ -94,12 +120,17 @@ class CleanPuffeRL:
                     f"with policy {resume_state['policy_checkpoint_name']}"
                 )
 
-        self.wandb_run_id = resume_state.get("wandb_run_id", None)
-        self.learning_rate = resume_state.get("learning_rate", self.learning_rate)
-
-        self.global_step = resume_state.get("global_step", 0)
-        self.agent_step = resume_state.get("agent_step", 0)
-        self.update = resume_state.get("update", 0)
+        if self.as_fine_tune:
+            self.wandb_run_id = None
+            self.global_step = 0
+            self.agent_step = 0
+            self.update = 0
+        else:
+            self.wandb_run_id = resume_state.get("wandb_run_id", None)
+            self.learning_rate = resume_state.get("learning_rate", self.learning_rate)
+            self.global_step = resume_state.get("global_step", 0)
+            self.agent_step = resume_state.get("agent_step", 0)
+            self.update = resume_state.get("update", 0)
 
         self.total_updates = self.total_timesteps // self.batch_size
         self.envs_per_worker = self.num_envs // self.num_cores
@@ -183,9 +214,12 @@ class CleanPuffeRL:
 
         # Setup optimizer
         self.optimizer = optim.Adam(
-            self.agent.parameters(), lr=self.learning_rate, eps=1e-5
+            self.agent.parameters(),
+            lr=self.learning_rate,
+            eps=1e-5,
+            weight_decay=self.weight_decay,
         )
-        if "optimizer_state_dict" in resume_state:
+        if not self.as_fine_tune and "optimizer_state_dict" in resume_state:
             self.optimizer.load_state_dict(resume_state["optimizer_state_dict"])
 
         ### Allocate Storage
@@ -287,6 +321,7 @@ class CleanPuffeRL:
         step = 0
         infos = defaultdict(lambda: defaultdict(list))
         stats = defaultdict(lambda: defaultdict(list))
+        curriculum = defaultdict(lambda: defaultdict(list))
         performance = defaultdict(list)
         progress_bar = tqdm(total=self.batch_size, disable=not show_progress)
 
@@ -398,7 +433,17 @@ class CleanPuffeRL:
                             stat = float(stat)
                             stats[policy_name][name].append(stat)
                         except:
-                            continue
+                            if name.startswith("curriculum/"):
+                                # Task completion status grouped by eval_fn
+                                eval_fn_name = name.split("_")[1]
+                                assert isinstance(stat, list) and len(stat) == 1
+                                _max_progress, reward_signal_count = stat[-1]
+                                curriculum[policy_name][eval_fn_name].append(
+                                    _max_progress
+                                )
+
+                            else:
+                                continue
 
         if self.policy_pool.scores and self.policy_ranker is not None:
             self.policy_ranker.update_ranks(
@@ -428,6 +473,13 @@ class CleanPuffeRL:
         self.global_step += self.batch_size
 
         if self.wandb_entity:
+            tasks_log = {}
+            for fn_name in TASK_EVAL_FN_NAMES:
+                v = curriculum["learner"][fn_name]
+                tasks_log[f"charts/tasks/max_progress/{fn_name}"] = (
+                    np.mean(v) if v else None
+                )
+
             wandb.log(
                 {
                     "performance/env_time": env_step_time,
@@ -439,6 +491,7 @@ class CleanPuffeRL:
                         for k, v in performance.items()
                     },
                     **{f"charts/{k}": np.mean(v) for k, v in stats["learner"].items()},
+                    **tasks_log,
                     "charts/reward": float(torch.mean(data.rewards)),
                     "agent_steps": self.global_step,
                     "global_step": self.global_step,

@@ -2,18 +2,65 @@ import os
 import logging
 import torch
 
-from pufferlib.vectorization import Serial, Multiprocessing
+from pufferlib.vectorization import Serial, Multiprocessing, Ray
 from pufferlib.policy_store import DirectoryPolicyStore
+from pufferlib.models import RecurrentWrapper
 from pufferlib.frameworks import cleanrl
 
 import environment
 
-from reinforcement_learning import clean_pufferl, policy, config
+from reinforcement_learning import clean_pufferl, config
+from reinforcement_learning.policy import Baseline
+from reinforcement_learning.policy_mix_encoders import MixtureEncodersModel
+from reinforcement_learning.policy_routing import (
+    PolicyRoutingModel,
+    PolicyRoutingModelDeep,
+)
+from reinforcement_learning.policy_reduce import ReducedModel
+from reinforcement_learning.policy_reduce_v2 import ReducedModelV2
 
 # NOTE: this file changes when running curriculum generation track
 # Run test_task_encoder.py to regenerate this file (or get it from the repo)
 BASELINE_CURRICULUM_FILE = "reinforcement_learning/curriculum_with_embedding.pkl"
 CUSTOM_CURRICULUM_FILE = "curriculum_generation/custom_curriculum_with_embedding.pkl"
+
+TASK_REWARD_SETTING_PATH = "reinforcement_learning/task_reward_setting.json"
+
+
+def get_make_policy_fn(args):
+    try:
+        model_cls = eval(args.model)
+        assert model_cls in (
+            Baseline,
+            MixtureEncodersModel,
+            PolicyRoutingModel,
+            PolicyRoutingModelDeep,
+            ReducedModel,
+            ReducedModelV2,
+        )
+    except:
+        raise Exception(f"Invalid model `{args.model}`")
+
+    def make_policy(envs):
+        learner_policy = model_cls(
+            envs.driver_env,
+            input_size=args.input_size,
+            hidden_size=args.hidden_size,
+            task_size=args.task_size,
+        )
+        if args.num_lstm_layers > 0:
+            learner_policy = RecurrentWrapper(
+                env=envs.driver_env,
+                policy=learner_policy,
+                input_size=args.input_size,
+                hidden_size=args.hidden_size,
+                num_layers=args.num_lstm_layers,
+            )
+            return cleanrl.RecurrentPolicy(learner_policy)
+        else:
+            return cleanrl.Policy(learner_policy)
+
+    return make_policy
 
 
 def setup_env(args):
@@ -28,35 +75,32 @@ def setup_env(args):
         logging.info("Using policy store from %s", args.policy_store_dir)
         policy_store = DirectoryPolicyStore(args.policy_store_dir)
 
-    def make_policy(envs):
-        learner_policy = policy.Baseline(
-            envs.driver_env,
-            input_size=args.input_size,
-            hidden_size=args.hidden_size,
-            task_size=args.task_size,
-        )
-        return cleanrl.Policy(learner_policy)
-
     trainer = clean_pufferl.CleanPuffeRL(
         device=torch.device(args.device),
         seed=args.seed,
         env_creator=environment.make_env_creator(args),
         env_creator_kwargs={},
-        agent_creator=make_policy,
+        agent_creator=get_make_policy_fn(args),
         data_dir=run_dir,
         exp_name=args.run_name,
         policy_store=policy_store,
         wandb_entity=args.wandb_entity,
         wandb_project=args.wandb_project,
         wandb_extra_data=args,
+        as_fine_tune=args.as_fine_tune,
         checkpoint_interval=args.checkpoint_interval,
-        vectorization=Serial if args.use_serial_vecenv else Multiprocessing,
+        vectorization=(
+            Serial
+            if args.use_serial_vecenv
+            else (Ray if args.use_ray_vecenv else Multiprocessing)
+        ),
         total_timesteps=args.train_num_steps,
         num_envs=args.num_envs,
         num_cores=args.num_cores or args.num_envs,
         num_buffers=args.num_buffers,
         batch_size=args.rollout_batch_size,
         learning_rate=args.ppo_learning_rate,
+        weight_decay=args.weight_decay,
         selfplay_learner_weight=args.learner_weight,
         selfplay_num_policies=args.max_opponent_policies + 1,
         # record_loss = args.record_loss,
@@ -72,6 +116,9 @@ def reinforcement_learning_track(trainer, args):
             bptt_horizon=args.bptt_horizon,
             batch_rows=args.ppo_training_batch_size // args.bptt_horizon,
             clip_coef=args.clip_coef,
+            clip_vloss=not args.no_clip_vloss,
+            ent_coef=args.ent_coef,
+            vf_coef=args.vf_coef,
         )
 
 
@@ -142,6 +189,7 @@ if __name__ == "__main__":
 
     if args.track == "rl":
         args.tasks_path = BASELINE_CURRICULUM_FILE
+        args.task_reward_setting_path = TASK_REWARD_SETTING_PATH
         trainer = setup_env(args)
         reinforcement_learning_track(trainer, args)
     elif args.track == "curriculum":
