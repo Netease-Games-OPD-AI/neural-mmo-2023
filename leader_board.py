@@ -12,43 +12,44 @@ from nmmo.core.realm import Realm
 from nmmo.lib.log import EventCode
 import nmmo.systems.item as Item
 
+
 @dataclass
 class TeamResult:
     policy_id: str = None
 
     # event-log based, coming from process_event_log
     total_score: int = 0
-    agent_kill_count: int = 0,
-    npc_kill_count: int = 0,
-    max_combat_level: int = 0,
-    max_harvest_level: int = 0,
-    max_damage: int = 0,
-    max_progress_to_center: int = 0,
-    eat_food_count: int = 0,
-    drink_water_count: int = 0,
-    attack_count: int = 0,
-    item_harvest_count: int = 0,
-    item_list_count: int = 0,
-    item_buy_count: int = 0,
+    agent_kill_count: int = (0,)
+    npc_kill_count: int = (0,)
+    max_combat_level: int = (0,)
+    max_harvest_level: int = (0,)
+    max_damage: int = (0,)
+    max_progress_to_center: int = (0,)
+    eat_food_count: int = (0,)
+    drink_water_count: int = (0,)
+    attack_count: int = (0,)
+    item_harvest_count: int = (0,)
+    item_list_count: int = (0,)
+    item_buy_count: int = (0,)
 
     # agent object based (fill these in the environment)
     # CHECK ME: perhaps create a stat wrapper for putting all stats in one place?
-    time_alive: int = 0,
-    earned_gold: int = 0,
-    completed_task_count: int = 0,
-    max_task_progress: float = 0,
-    damage_received: int = 0,
-    damage_inflicted: int = 0,
-    ration_consumed: int = 0,
-    potion_consumed: int = 0,
-    melee_level: int = 0,
-    range_level: int = 0,
-    mage_level: int = 0,
-    fishing_level: int = 0,
-    herbalism_level: int = 0,
-    prospecting_level: int = 0,
-    carving_level: int = 0,
-    alchemy_level: int = 0,
+    time_alive: int = (0,)
+    earned_gold: int = (0,)
+    completed_task_count: int = (0,)
+    max_task_progress: float = (0,)
+    damage_received: int = (0,)
+    damage_inflicted: int = (0,)
+    ration_consumed: int = (0,)
+    potion_consumed: int = (0,)
+    melee_level: int = (0,)
+    range_level: int = (0,)
+    mage_level: int = (0,)
+    fishing_level: int = (0,)
+    herbalism_level: int = (0,)
+    prospecting_level: int = (0,)
+    carving_level: int = (0,)
+    alchemy_level: int = (0,)
 
     # system-level
     n_timeout: Optional[int] = 0
@@ -88,21 +89,22 @@ class TeamResult:
             "alchemy_level",
         ]
 
+
 def get_episode_result(realm: Realm, agent_id):
     achieved, performed, event_cnt = process_event_log(realm, [agent_id])
     # NOTE: Not actually a "team" result. Just a "team" of one agent
     result = TeamResult(
-        policy_id = str(agent_id),  # TODO: put actual team/policy name here
-        agent_kill_count = achieved["achieved/agent_kill_count"],
-        npc_kill_count = achieved["achieved/npc_kill_count"],
-        max_damage = achieved["achieved/max_damage"],
-        max_progress_to_center = achieved["achieved/max_progress_to_center"],
-        eat_food_count = event_cnt["event/eat_food"],
-        drink_water_count = event_cnt["event/drink_water"],
-        attack_count = event_cnt["event/score_hit"],
-        item_harvest_count = event_cnt["event/harvest_item"],
-        item_list_count = event_cnt["event/list_item"],
-        item_buy_count = event_cnt["event/buy_item"],
+        policy_id=str(agent_id),  # TODO: put actual team/policy name here
+        agent_kill_count=achieved["achieved/agent_kill_count"],
+        npc_kill_count=achieved["achieved/npc_kill_count"],
+        max_damage=achieved["achieved/max_damage"],
+        max_progress_to_center=achieved["achieved/max_progress_to_center"],
+        eat_food_count=event_cnt["event/eat_food"],
+        drink_water_count=event_cnt["event/drink_water"],
+        attack_count=event_cnt["event/score_hit"],
+        item_harvest_count=event_cnt["event/harvest_item"],
+        item_list_count=event_cnt["event/list_item"],
+        item_buy_count=event_cnt["event/buy_item"],
     )
 
     return result, achieved, performed, event_cnt
@@ -110,8 +112,9 @@ def get_episode_result(realm: Realm, agent_id):
 
 class StatPostprocessor(pufferlib.emulation.Postprocessor):
     """Postprocessing actions and metrics of Neural MMO.
-       Process wandb/leader board stats, and save replays.
+    Process wandb/leader board stats, and save replays.
     """
+
     def __init__(self, env, agent_id, eval_mode=False):
         super().__init__(env, is_multiagent=True, agent_id=agent_id)
         self.eval_mode = eval_mode
@@ -159,7 +162,9 @@ class StatPostprocessor(pufferlib.emulation.Postprocessor):
     def _update_stats(self, agent):
         task = self.env.agent_task_map[agent.ent_id][0]
         # For each task spec, record whether its max progress and reward count
-        self._curriculum[task.spec_name].append((task._max_progress, task.reward_signal_count))
+        self._curriculum[task.spec_name].append(
+            (task._max_progress, task.reward_signal_count)
+        )
         self._max_task_progress = task._max_progress
         if task.reward_signal_count >= 2:
             self._task_with_2_reward_signal = 1.0
@@ -176,13 +181,15 @@ class StatPostprocessor(pufferlib.emulation.Postprocessor):
             self._cod_dehydrated = 1.0
 
         self._combat_level.append(agent.attack_level)
-        self._harvest_level.append(max(
-            agent.fishing_level.val,
-            agent.herbalism_level.val,
-            agent.prospecting_level.val,
-            agent.carving_level.val,
-            agent.alchemy_level.val,
-        ))
+        self._harvest_level.append(
+            max(
+                agent.fishing_level.val,
+                agent.herbalism_level.val,
+                agent.prospecting_level.val,
+                agent.carving_level.val,
+                agent.alchemy_level.val,
+            )
+        )
 
         # For TeamResult
         self._time_alive += agent.history.time_alive.val
@@ -213,20 +220,22 @@ class StatPostprocessor(pufferlib.emulation.Postprocessor):
         """Update stats + info and save replays."""
 
         # Remove the task from info. Curriculum info is processed in _update_stats()
-        info.pop('task', None)
+        info.pop("task", None)
 
         # Count and store unique event counts for easier use
         log = self.env.realm.event_log.get_data(agents=[self.agent_id])
         self._prev_unique_count = self._curr_unique_count
-        self._curr_unique_count = len(extract_unique_event(log, self.env.realm.event_log.attr_to_col))
+        self._curr_unique_count = len(
+            extract_unique_event(log, self.env.realm.event_log.attr_to_col)
+        )
 
         if not done:
             self.epoch_length += 1
             self.epoch_return += reward
             return reward, done, info
 
-        if 'stats' not in info:
-            info['stats'] = {}
+        if "stats" not in info:
+            info["stats"] = {}
 
         agent = self.env.realm.players.dead_this_tick.get(
             self.agent_id, self.env.realm.players.get(self.agent_id)
@@ -234,8 +243,8 @@ class StatPostprocessor(pufferlib.emulation.Postprocessor):
         assert agent is not None
         self._update_stats(agent)
 
-        info['return'] = self.epoch_return
-        info['length'] = self.epoch_length
+        info["return"] = self.epoch_return
+        info["length"] = self.epoch_length
 
         info["stats"]["cod/attacked"] = self._cod_attacked
         info["stats"]["cod/starved"] = self._cod_starved
@@ -249,7 +258,9 @@ class StatPostprocessor(pufferlib.emulation.Postprocessor):
         info["stats"]["achieved/unique_events"] = self._curr_unique_count
         info["curriculum"] = self._curriculum
 
-        result, achieved, performed, _ = get_episode_result(self.env.realm, self.agent_id)
+        result, achieved, performed, _ = get_episode_result(
+            self.env.realm, self.agent_id
+        )
         for key, val in list(achieved.items()) + list(performed.items()):
             info["stats"][key] = float(val)
 
@@ -280,6 +291,7 @@ class StatPostprocessor(pufferlib.emulation.Postprocessor):
 
         return reward, done, info
 
+
 # Event processing utilities for Neural MMO.
 
 INFO_KEY_TO_EVENT_CODE = {
@@ -303,11 +315,14 @@ KEY_EVENT = [
 ITEM_TYPE = {
     "armor": [item.ITEM_TYPE_ID for item in [Item.Hat, Item.Top, Item.Bottom]],
     "weapon": [item.ITEM_TYPE_ID for item in [Item.Spear, Item.Bow, Item.Wand]],
-    "tool": [item.ITEM_TYPE_ID for item in \
-             [Item.Axe, Item.Gloves, Item.Rod, Item.Pickaxe, Item.Chisel]],
+    "tool": [
+        item.ITEM_TYPE_ID
+        for item in [Item.Axe, Item.Gloves, Item.Rod, Item.Pickaxe, Item.Chisel]
+    ],
     "ammo": [item.ITEM_TYPE_ID for item in [Item.Runes, Item.Arrow, Item.Whetstone]],
     "consumable": [item.ITEM_TYPE_ID for item in [Item.Potion, Item.Ration]],
 }
+
 
 def process_event_log(realm, agent_list):
     """Process the event log and extract performed actions and achievements."""
@@ -331,14 +346,16 @@ def process_event_log(realm, agent_list):
         if item_type == "consumable":
             continue
         key = "event/equip_" + item_type
-        idx = (log[:, attr_to_col["event"]] == EventCode.EQUIP_ITEM) & \
-              np.in1d(log[:, attr_to_col["item_type"]], item_ids)
+        idx = (log[:, attr_to_col["event"]] == EventCode.EQUIP_ITEM) & np.in1d(
+            log[:, attr_to_col["item_type"]], item_ids
+        )
         performed[key] = sum(idx) > 0
 
     # check if weapon was harvested
     key = "event/harvest_weapon"
-    idx = (log[:, attr_to_col["event"]] == EventCode.HARVEST_ITEM) & \
-          np.in1d(log[:, attr_to_col["item_type"]], ITEM_TYPE["weapon"])
+    idx = (log[:, attr_to_col["event"]] == EventCode.HARVEST_ITEM) & np.in1d(
+        log[:, attr_to_col["item_type"]], ITEM_TYPE["weapon"]
+    )
     performed[key] = sum(idx) > 0
 
     # record important achievements
@@ -346,8 +363,9 @@ def process_event_log(realm, agent_list):
 
     # get progress to center
     idx = log[:, attr_to_col["event"]] == EventCode.GO_FARTHEST
-    achieved["achieved/max_progress_to_center"] = \
+    achieved["achieved/max_progress_to_center"] = (
         int(max(log[idx, attr_to_col["distance"]])) if sum(idx) > 0 else 0
+    )
 
     # get earned gold
     idx = log[:, attr_to_col["event"]] == EventCode.EARN_GOLD
@@ -355,23 +373,35 @@ def process_event_log(realm, agent_list):
 
     # get max damage
     idx = log[:, attr_to_col["event"]] == EventCode.SCORE_HIT
-    achieved["achieved/max_damage"] = int(max(log[idx, attr_to_col["damage"]])) if sum(idx) > 0 else 0
+    achieved["achieved/max_damage"] = (
+        int(max(log[idx, attr_to_col["damage"]])) if sum(idx) > 0 else 0
+    )
 
     # get max possessed item levels: from harvesting, looting, buying
-    idx = np.in1d(log[:, attr_to_col["event"]],
-                  [EventCode.HARVEST_ITEM, EventCode.LOOT_ITEM, EventCode.BUY_ITEM])
+    idx = np.in1d(
+        log[:, attr_to_col["event"]],
+        [EventCode.HARVEST_ITEM, EventCode.LOOT_ITEM, EventCode.BUY_ITEM],
+    )
     if sum(idx) > 0:
-      for item_type, item_ids in ITEM_TYPE.items():
-          idx_item = np.in1d(log[idx, attr_to_col["item_type"]], item_ids)
-          achieved["achieved/max_" + item_type + "_level"] = \
-            int(max(log[idx][idx_item, attr_to_col["level"]])) if sum(idx_item) > 0 else 1  # min level = 1
+        for item_type, item_ids in ITEM_TYPE.items():
+            idx_item = np.in1d(log[idx, attr_to_col["item_type"]], item_ids)
+            achieved["achieved/max_" + item_type + "_level"] = (
+                int(max(log[idx][idx_item, attr_to_col["level"]]))
+                if sum(idx_item) > 0
+                else 1
+            )  # min level = 1
 
     # other notable achievements
-    idx = (log[:, attr_to_col["event"]] == EventCode.PLAYER_KILL)
-    achieved["achieved/agent_kill_count"] = int(sum(idx & (log[:, attr_to_col["target_ent"]] > 0)))
-    achieved["achieved/npc_kill_count"] = int(sum(idx & (log[:, attr_to_col["target_ent"]] < 0)))
+    idx = log[:, attr_to_col["event"]] == EventCode.PLAYER_KILL
+    achieved["achieved/agent_kill_count"] = int(
+        sum(idx & (log[:, attr_to_col["target_ent"]] > 0))
+    )
+    achieved["achieved/npc_kill_count"] = int(
+        sum(idx & (log[:, attr_to_col["target_ent"]] < 0))
+    )
 
     return achieved, performed, event_cnt
+
 
 def extract_unique_event(log, attr_to_col):
     if len(log) == 0:  # no event logs
@@ -403,7 +433,8 @@ def extract_unique_event(log, attr_to_col):
     ].copy()  # this is a hack
 
     # return unique events after masking
-    return set(tuple(row) for row in log[:, attr_to_col["event"]:])
+    return set(tuple(row) for row in log[:, attr_to_col["event"] :])
+
 
 def calculate_entropy(sequence):
     frequencies = Counter(sequence)

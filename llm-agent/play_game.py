@@ -14,19 +14,23 @@ from generated_agent import Agent
 
 SEED = 42
 
+
 def get_agent_info(env, agent_id):
     # some other old info can be accessed via
     # env.realm.players[agent_id].history
     task = env.agent_task_map[agent_id][0]
     log = {
         "lifetime": env.realm.tick,
-        "task_name": "Default StayAlive task" if task.spec_name is None else task.spec_name,
+        "task_name": "Default StayAlive task"
+        if task.spec_name is None
+        else task.spec_name,
         "task_completed": task.completed,
     }
     achieved, performed, _ = process_event_log(env.realm, [agent_id])
     log.update(achieved)
     log.update(performed)
     return log
+
 
 config = nmmo.config.Default()
 config.PLAYERS = [Agent]
@@ -43,10 +47,12 @@ agent_info = []
 obs = env.reset(seed=SEED)
 for t in tqdm(range(128)):
     _, _, d, _ = env.step({})
-    agent_info += [get_agent_info(env, agent_id) for agent_id in d if d[agent_id] is True]
+    agent_info += [
+        get_agent_info(env, agent_id) for agent_id in d if d[agent_id] is True
+    ]
 
-os.makedirs('replays', exist_ok=True)
-replay_helper.save('replays/gpt-agent')
+os.makedirs("replays", exist_ok=True)
+replay_helper.save("replays/gpt-agent")
 
 # remaining agents
 agent_info += [get_agent_info(env, agent_id) for agent_id in env.realm.players]
@@ -56,5 +62,5 @@ for key in agent_info[0]:
         mean_val = np.mean([info[key] for info in agent_info])
         print(f"{key}: Mean value of {mean_val}")
     else:
-      max_val = max([info[key] for info in agent_info])
-      print(f"{key}: Maximum value of {max_val}")
+        max_val = max([info[key] for info in agent_info])
+        print(f"{key}: Maximum value of {max_val}")

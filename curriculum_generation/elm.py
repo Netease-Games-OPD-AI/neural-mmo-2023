@@ -109,11 +109,12 @@ def extract_task_fn(result_str, fn_name):
     split = result_str.split("\n")
     fn_str = []
     for line in split[::-1]:
-      if line.startswith(f"def {fn_name}("):
+        if line.startswith(f"def {fn_name}("):
+            fn_str.append(line)
+            break
         fn_str.append(line)
-        break
-      fn_str.append(line)
     return "\n".join(fn_str[::-1])
+
 
 def sample_parameter(key, type_hint):
     """
@@ -225,57 +226,58 @@ def is_task_spec_valid(spec_list: List[ts.TaskSpec], timeout=15) -> bool:
     # Return True if at least one task ran successfully.
     return num_success > 0
 
+
 def generate_task_spec(result_str, fn_name, num_sample=3):
-  """
-  Generates a list of TaskSpec objects from the task function string provided during the class instantiation.
-  Each TaskSpec is an instantiation of the task function with sampled parameters.
+    """
+    Generates a list of TaskSpec objects from the task function string provided during the class instantiation.
+    Each TaskSpec is an instantiation of the task function with sampled parameters.
 
-  Args:
-      program_str: The string representation of the task function.
-      fn_name: The name of the task function.
-      num_sample: The number of TaskSpecs to generate. Defaults to None, which will generate a TaskSpec for each valid
-      function parameter set.
+    Args:
+        program_str: The string representation of the task function.
+        fn_name: The name of the task function.
+        num_sample: The number of TaskSpecs to generate. Defaults to None, which will generate a TaskSpec for each valid
+        function parameter set.
 
-  Returns:
-      A list of valid TaskSpec objects. If the task function string is invalid or no valid TaskSpecs can be generated,
-      an empty list is returned.
-  """
-  task_spec = []
-  task_fn_str = extract_task_fn(result_str, fn_name)
-  import_str = (
-      "from nmmo.task.game_state import GameState\n"
-      + "from nmmo.task.group import Group\n"
-      + "from nmmo.task.base_predicates import *\n\n"
-  )
+    Returns:
+        A list of valid TaskSpec objects. If the task function string is invalid or no valid TaskSpecs can be generated,
+        an empty list is returned.
+    """
+    task_spec = []
+    task_fn_str = extract_task_fn(result_str, fn_name)
+    import_str = (
+        "from nmmo.task.game_state import GameState\n"
+        + "from nmmo.task.group import Group\n"
+        + "from nmmo.task.base_predicates import *\n\n"
+    )
 
-  locals_dict = {}
-  try:
-    # NOTE: this is a security vulenerability
-    # TODO: make this secure
-    exec(import_str + task_fn_str, globals(), locals_dict)
-  except:
-    # return empty task spec for invalid function
-    print("Invalid python function generated ...")
+    locals_dict = {}
+    try:
+        # NOTE: this is a security vulenerability
+        # TODO: make this secure
+        exec(import_str + task_fn_str, globals(), locals_dict)
+    except:
+        # return empty task spec for invalid function
+        print("Invalid python function generated ...")
+        return task_spec
+    task_fn = locals_dict[fn_name]
+    fn_params = inspect.signature(task_fn).parameters
+
+    included_kwargs = set()
+    for _ in range(num_sample):
+        task_fn_kwargs = {}
+        for key, param in fn_params.items():
+            if key in ["gs", "subject"]:
+                continue
+            type_hint = param.annotation.__name__
+            task_fn_kwargs[key] = sample_parameter(key, type_hint)
+        args_vals = tuple(task_fn_kwargs.values())
+        if args_vals not in included_kwargs:
+            task_spec.append(
+                ts.TaskSpec(eval_fn=task_fn, eval_fn_kwargs=task_fn_kwargs)
+            )
+            included_kwargs.add(args_vals)
+
     return task_spec
-  task_fn = locals_dict[fn_name]
-  fn_params = inspect.signature(task_fn).parameters
-
-  included_kwargs = set()
-  for _ in range(num_sample):
-    task_fn_kwargs = {}
-    for key, param in fn_params.items():
-      if key in ["gs", "subject"]:
-        continue
-      type_hint = param.annotation.__name__
-      task_fn_kwargs[key] = sample_parameter(key, type_hint)
-    args_vals = tuple(task_fn_kwargs.values())
-    if args_vals not in included_kwargs:
-      task_spec.append(
-          ts.TaskSpec(eval_fn=task_fn, eval_fn_kwargs=task_fn_kwargs)
-      )
-      included_kwargs.add(args_vals)
-
-  return task_spec
 
 
 class NMMOTaskFn(Genotype):
@@ -293,9 +295,7 @@ class NMMOTaskFn(Genotype):
         self._fitness = -np.inf
         self._fn_name = fn_name
         self.program_str = extract_task_fn(program_str, self._fn_name)
-        self.valid = is_task_spec_valid(
-            generate_task_spec(program_str, self._fn_name)
-        )
+        self.valid = is_task_spec_valid(generate_task_spec(program_str, self._fn_name))
 
         self.PREBUILT_TASK_FN = {
             name: fn
@@ -556,12 +556,13 @@ class NMMOEnvironment(BaseEnvironment[NMMOTaskFn]):
         return -np.inf
 
     def get_rng_state(self) -> Optional[np.random._generator.Generator]:
-        #warnings.warn("WARNING: rng state not used in this environment")
+        # warnings.warn("WARNING: rng state not used in this environment")
         return None
 
     def set_rng_state(self, rng_state: Optional[np.random._generator.Generator]):
-        #warnings.warn("WARNING: rng state not used in this environment")
+        # warnings.warn("WARNING: rng state not used in this environment")
         pass
+
 
 def entropy(task):
     """

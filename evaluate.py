@@ -28,6 +28,7 @@ import environment
 
 from reinforcement_learning import config, clean_pufferl
 
+
 def setup_policy_store(policy_store_dir):
     # CHECK ME: can be custom models with different architectures loaded here?
     if not os.path.exists(policy_store_dir):
@@ -37,6 +38,7 @@ def setup_policy_store(policy_store_dir):
     logging.info("Using policy store from %s", policy_store_dir)
     policy_store = DirectoryPolicyStore(policy_store_dir)
     return policy_store
+
 
 def save_replays(policy_store_dir, save_dir, curriculum_file, task_to_assign=None):
     # load the checkpoints into the policy store
@@ -63,12 +65,13 @@ def save_replays(policy_store_dir, save_dir, curriculum_file, task_to_assign=Non
 
     # NOTE: This creates a dummy learner agent. Is it necessary?
     from reinforcement_learning import policy  # import your policy
+
     def make_policy(envs):
         learner_policy = policy.Baseline(
             envs.driver_env,
             input_size=args.input_size,
             hidden_size=args.hidden_size,
-            task_size=args.task_size
+            task_size=args.task_size,
         )
         return cleanrl.Policy(learner_policy)
 
@@ -85,17 +88,19 @@ def save_replays(policy_store_dir, save_dir, curriculum_file, task_to_assign=Non
         selfplay_learner_weight=args.learner_weight,
         selfplay_num_policies=args.selfplay_num_policies,
         policy_store=policy_store,
-        policy_ranker=policy_ranker, # so that a new ranker is created
+        policy_ranker=policy_ranker,  # so that a new ranker is created
         data_dir=save_dir,
     )
 
     # Load the policies into the policy pool
-    evaluator.policy_pool.update_policies({
-        p.name: p.policy(
-            policy_args=[evaluator.buffers[0]], 
-            device=evaluator.device
-        ) for p in list(policy_store._all_policies().values())
-    })
+    evaluator.policy_pool.update_policies(
+        {
+            p.name: p.policy(
+                policy_args=[evaluator.buffers[0]], device=evaluator.device
+            )
+            for p in list(policy_store._all_policies().values())
+        }
+    )
 
     # Set up the replay helper
     o, r, d, i = evaluator.buffers[0].recv()  # reset the env
@@ -104,17 +109,17 @@ def save_replays(policy_store_dir, save_dir, curriculum_file, task_to_assign=Non
     nmmo_env.realm.record_replay(replay_helper)
 
     if task_to_assign is not None:
-        with open(curriculum_file, 'rb') as f:
-            task_with_embedding = dill.load(f) # a list of TaskSpec
+        with open(curriculum_file, "rb") as f:
+            task_with_embedding = dill.load(f)  # a list of TaskSpec
         assert 0 <= task_to_assign < len(task_with_embedding), "Task index out of range"
         select_task = task_with_embedding[task_to_assign]
 
         # Assign the task to the env
-        tasks = make_task_from_spec(nmmo_env.possible_agents,
-                                    [select_task] * len(nmmo_env.possible_agents))
+        tasks = make_task_from_spec(
+            nmmo_env.possible_agents, [select_task] * len(nmmo_env.possible_agents)
+        )
         nmmo_env.tasks = tasks  # this is a hack
-        print("seed:", args.seed,
-              ", task:", nmmo_env.tasks[0].spec_name)
+        print("seed:", args.seed, ", task:", nmmo_env.tasks[0].spec_name)
 
     # Run an episode to generate the replay
     replay_helper.reset()
@@ -131,9 +136,19 @@ def save_replays(policy_store_dir, save_dir, curriculum_file, task_to_assign=Non
 
         num_alive = len(nmmo_env.realm.players)
         task_done = sum(1 for task in nmmo_env.tasks if task.completed)
-        alive_done = sum(1 for task in nmmo_env.tasks
-                         if task.completed and task.assignee[0] in nmmo_env.realm.players)
-        print("Tick:", nmmo_env.realm.tick, ", alive agents:", num_alive, ", task done:", task_done)
+        alive_done = sum(
+            1
+            for task in nmmo_env.tasks
+            if task.completed and task.assignee[0] in nmmo_env.realm.players
+        )
+        print(
+            "Tick:",
+            nmmo_env.realm.tick,
+            ", alive agents:",
+            num_alive,
+            ", task done:",
+            task_done,
+        )
         if num_alive == alive_done:
             print("All alive agents completed the task.")
             break
@@ -146,10 +161,17 @@ def save_replays(policy_store_dir, save_dir, curriculum_file, task_to_assign=Non
     print("Task:", nmmo_env.tasks[0].spec_name)
     num_completed = sum(1 for task in nmmo_env.tasks if task.completed)
     print("Number of agents completed the task:", num_completed)
-    avg_progress = np.mean([task.progress_info["max_progress"] for task in nmmo_env.tasks])
+    avg_progress = np.mean(
+        [task.progress_info["max_progress"] for task in nmmo_env.tasks]
+    )
     print(f"Average maximum progress (max=1): {avg_progress:.3f}")
-    avg_completed_tick = np.mean([task.progress_info["completed_tick"]
-                                  for task in nmmo_env.tasks if task.completed])
+    avg_completed_tick = np.mean(
+        [
+            task.progress_info["completed_tick"]
+            for task in nmmo_env.tasks
+            if task.completed
+        ]
+    )
     print(f"Average completed tick: {avg_completed_tick:.1f}")
 
     # Save the replay file
@@ -158,7 +180,10 @@ def save_replays(policy_store_dir, save_dir, curriculum_file, task_to_assign=Non
     replay_helper.save(replay_file, compress=False)
     evaluator.close()
 
-def create_policy_ranker(policy_store_dir, ranker_file="ranker.pickle", db_file="ranking.sqlite"):
+
+def create_policy_ranker(
+    policy_store_dir, ranker_file="ranker.pickle", db_file="ranking.sqlite"
+):
     file = os.path.join(policy_store_dir, ranker_file)
     if os.path.exists(file):
         logging.info("Using existing policy ranker from %s", file)
@@ -169,14 +194,14 @@ def create_policy_ranker(policy_store_dir, ranker_file="ranker.pickle", db_file=
         policy_ranker = pufferlib.policy_ranker.OpenSkillRanker(db_file, "anchor")
     return policy_ranker
 
+
 class AllPolicySelector(pufferlib.policy_ranker.PolicySelector):
     def select_policies(self, policies):
         # Return all policy names in the alpahebetical order
         # Loops circularly if more policies are needed than available
-        loop = cycle([
-            policies[name] for name in sorted(policies.keys()
-        )])
+        loop = cycle([policies[name] for name in sorted(policies.keys())])
         return [next(loop) for _ in range(self._num)]
+
 
 def rank_policies(policy_store_dir, eval_curriculum_file, device):
     # CHECK ME: can be custom models with different architectures loaded here?
@@ -198,12 +223,13 @@ def rank_policies(policy_store_dir, eval_curriculum_file, device):
 
     # NOTE: This creates a dummy learner agent. Is it necessary?
     from reinforcement_learning import policy  # import your policy
+
     def make_policy(envs):
         learner_policy = policy.Baseline(
             envs.driver_env,
             input_size=args.input_size,
             hidden_size=args.hidden_size,
-            task_size=args.task_size
+            task_size=args.task_size,
         )
         return cleanrl.Policy(learner_policy)
 
@@ -223,7 +249,7 @@ def rank_policies(policy_store_dir, eval_curriculum_file, device):
         selfplay_num_policies=args.selfplay_num_policies,
         batch_size=args.eval_batch_size,
         policy_store=policy_store,
-        policy_ranker=policy_ranker, # so that a new ranker is created
+        policy_ranker=policy_ranker,  # so that a new ranker is created
         policy_selector=policy_selector,
     )
 
@@ -238,9 +264,7 @@ def rank_policies(policy_store_dir, eval_curriculum_file, device):
         _, stats, infos = evaluator.evaluate()
 
         for pol, vals in infos.items():
-            results[pol].extend([
-                e[1] for e in infos[pol]['team_results']
-            ])
+            results[pol].extend([e[1] for e in infos[pol]["team_results"]])
 
         ratings = evaluator.policy_ranker.ratings()
         dataframe = pd.DataFrame(
@@ -265,11 +289,11 @@ def rank_policies(policy_store_dir, eval_curriculum_file, device):
         aggregated = {}
         keys = asdict(res[0]).keys()
         for k in keys:
-            if k == 'policy_id':
+            if k == "policy_id":
                 continue
             aggregated[k] = np.mean([asdict(e)[k] for e in res])
         results[pol] = aggregated
-    print('Evaluation complete. Average stats:\n', results)
+    print("Evaluation complete. Average stats:\n", results)
 
 
 if __name__ == "__main__":
@@ -282,7 +306,7 @@ if __name__ == "__main__":
     -t, --task-file: Task file to use for evaluation (Default: reinforcement_learning/eval_task_with_embedding.pkl)
     -i, --task-index: The index of the task to assign in the curriculum file (Default: None)
 
-    To generate replay from your checkpoints, put them together in policy_store_dir, run the following command, 
+    To generate replay from your checkpoints, put them together in policy_store_dir, run the following command,
     and replays will be saved under the replays/. The script will only use 1 environment.
     $ python evaluate.py -p <policy_store_dir>
 
@@ -346,12 +370,20 @@ if __name__ == "__main__":
 
     # Parse and check the arguments
     eval_args = parser.parse_args()
-    assert eval_args.policy_store_dir is not None, "Policy store directory must be specified"
+    assert (
+        eval_args.policy_store_dir is not None
+    ), "Policy store directory must be specified"
 
     if getattr(eval_args, "replay_mode", False):
-        logging.info("Generating replays from the checkpoints in %s", eval_args.policy_store_dir)
-        save_replays(eval_args.policy_store_dir, eval_args.replay_save_dir,
-                     eval_args.task_file, eval_args.task_index)
+        logging.info(
+            "Generating replays from the checkpoints in %s", eval_args.policy_store_dir
+        )
+        save_replays(
+            eval_args.policy_store_dir,
+            eval_args.replay_save_dir,
+            eval_args.task_file,
+            eval_args.task_index,
+        )
     else:
         logging.info("Ranking checkpoints from %s", eval_args.policy_store_dir)
         logging.info("Replays will NOT be generated")

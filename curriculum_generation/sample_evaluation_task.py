@@ -10,9 +10,7 @@ from nmmo.task.task_spec import TaskSpec
 curriculum: List[TaskSpec] = []
 
 # Stay alive as long as possible
-curriculum.append(
-    TaskSpec(eval_fn=TickGE, eval_fn_kwargs={"num_tick": 1024})
-)
+curriculum.append(TaskSpec(eval_fn=TickGE, eval_fn_kwargs={"num_tick": 1024}))
 
 # Perform these 10 times
 essential_skills = [
@@ -49,6 +47,4 @@ for skill in c.combat_skills + c.harvest_skills:
     )
 
 # Earn gold 50
-curriculum.append(
-    TaskSpec(eval_fn=EarnGold, eval_fn_kwargs={"amount": 50})
-)
+curriculum.append(TaskSpec(eval_fn=EarnGold, eval_fn_kwargs={"amount": 50}))

@@ -7,6 +7,7 @@ import pufferlib.emulation
 
 from leader_board import StatPostprocessor, calculate_entropy
 
+
 class Config(nmmo.config.Default):
     """Configuration for Neural MMO."""
 
@@ -31,8 +32,13 @@ class Config(nmmo.config.Default):
 
         self.COMBAT_SPAWN_IMMUNITY = args.spawn_immunity
 
+
 class Postprocessor(StatPostprocessor):
-    def __init__(self, env, is_multiagent, agent_id,
+    def __init__(
+        self,
+        env,
+        is_multiagent,
+        agent_id,
         eval_mode=False,
         early_stop_agent_num=0,
         sqrt_achievement_rewards=False,
@@ -50,12 +56,12 @@ class Postprocessor(StatPostprocessor):
         self.clip_unique_event = clip_unique_event
 
     def reset(self, obs):
-        '''Called at the start of each episode'''
+        """Called at the start of each episode"""
         super().reset(obs)
 
     @property
     def observation_space(self):
-        '''If you modify the shape of features, you need to specify the new obs space'''
+        """If you modify the shape of features, you need to specify the new obs space"""
         return super().observation_space
 
     """
@@ -73,7 +79,7 @@ class Postprocessor(StatPostprocessor):
     """
 
     def reward_done_info(self, reward, done, info):
-        '''Called on reward, done, and info before they are returned from the environment'''
+        """Called on reward, done, and info before they are returned from the environment"""
 
         # Stop early if there are too few agents generating the training data
         if len(self.env.agents) <= self.early_stop_agent_num:
@@ -93,16 +99,20 @@ class Postprocessor(StatPostprocessor):
         # Add meandering bonus to encourage moving to various directions
         meander_bonus = 0
         if len(self._last_moves) > 5:
-          move_entropy = calculate_entropy(self._last_moves[-8:])  # of last 8 moves
-          meander_bonus = self.meander_bonus_weight * (move_entropy - 1)
+            move_entropy = calculate_entropy(self._last_moves[-8:])  # of last 8 moves
+            meander_bonus = self.meander_bonus_weight * (move_entropy - 1)
 
         # Unique event-based rewards, similar to exploration bonus
         # The number of unique events are available in self._curr_unique_count, self._prev_unique_count
         if self.sqrt_achievement_rewards:
-            explore_bonus = math.sqrt(self._curr_unique_count) - math.sqrt(self._prev_unique_count)
+            explore_bonus = math.sqrt(self._curr_unique_count) - math.sqrt(
+                self._prev_unique_count
+            )
         else:
-            explore_bonus = min(self.clip_unique_event,
-                                self._curr_unique_count - self._prev_unique_count)
+            explore_bonus = min(
+                self.clip_unique_event,
+                self._curr_unique_count - self._prev_unique_count,
+            )
         explore_bonus *= self.explore_bonus_weight
 
         reward = reward + explore_bonus + healing_bonus + meander_bonus
@@ -115,16 +125,18 @@ def make_env_creator(args: Namespace):
     def env_creator():
         """Create an environment."""
         env = nmmo.Env(Config(args))
-        env = pufferlib.emulation.PettingZooPufferEnv(env,
+        env = pufferlib.emulation.PettingZooPufferEnv(
+            env,
             postprocessor_cls=Postprocessor,
             postprocessor_kwargs={
-                'eval_mode': args.eval_mode,
-                'early_stop_agent_num': args.early_stop_agent_num,
-                'sqrt_achievement_rewards': args.sqrt_achievement_rewards,
-                'heal_bonus_weight': args.heal_bonus_weight,
-                'meander_bonus_weight': args.meander_bonus_weight,
-                'explore_bonus_weight': args.explore_bonus_weight,
+                "eval_mode": args.eval_mode,
+                "early_stop_agent_num": args.early_stop_agent_num,
+                "sqrt_achievement_rewards": args.sqrt_achievement_rewards,
+                "heal_bonus_weight": args.heal_bonus_weight,
+                "meander_bonus_weight": args.meander_bonus_weight,
+                "explore_bonus_weight": args.explore_bonus_weight,
             },
         )
         return env
+
     return env_creator

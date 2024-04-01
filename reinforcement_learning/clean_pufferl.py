@@ -49,7 +49,7 @@ class CleanPuffeRL:
 
     exp_name: str = os.path.basename(__file__)
 
-    data_dir: str = 'data'
+    data_dir: str = "data"
     record_loss: bool = False
     checkpoint_interval: int = 1
     seed: int = 1
@@ -85,12 +85,14 @@ class CleanPuffeRL:
         # If data_dir is provided, load the resume state
         resume_state = {}
         if self.data_dir is not None:
-          path = os.path.join(self.data_dir, f"trainer.pt")
-          if os.path.exists(path):
-            print(f"Loaded checkpoint from {path}")
-            resume_state = torch.load(path)
-            print(f"Resuming from update {resume_state['update']} "
-                  f"with policy {resume_state['policy_checkpoint_name']}")
+            path = os.path.join(self.data_dir, f"trainer.pt")
+            if os.path.exists(path):
+                print(f"Loaded checkpoint from {path}")
+                resume_state = torch.load(path)
+                print(
+                    f"Resuming from update {resume_state['update']} "
+                    f"with policy {resume_state['policy_checkpoint_name']}"
+                )
 
         self.wandb_run_id = resume_state.get("wandb_run_id", None)
         self.learning_rate = resume_state.get("learning_rate", self.learning_rate)
@@ -126,7 +128,8 @@ class CleanPuffeRL:
 
         # If an agent_creator is provided, use envs (=self.buffers[0]) to create the agent
         self.agent = pufferlib.emulation.make_object(
-            self.agent, self.agent_creator, self.buffers[:1], self.agent_kwargs)
+            self.agent, self.agent_creator, self.buffers[:1], self.agent_kwargs
+        )
 
         if self.verbose:
             print(
@@ -145,15 +148,17 @@ class CleanPuffeRL:
         if self.policy_ranker is None:
             if self.data_dir is not None:
                 db_file = os.path.join(self.data_dir, "ranking.sqlite")
-                self.policy_ranker = pufferlib.policy_ranker.OpenSkillRanker(db_file, "anchor")
+                self.policy_ranker = pufferlib.policy_ranker.OpenSkillRanker(
+                    db_file, "anchor"
+                )
             if "learner" not in self.policy_ranker.ratings():
                 self.policy_ranker.add_policy("learner")
 
         # Setup agent
         if "policy_checkpoint_name" in resume_state:
-          self.agent = self.policy_store.get_policy(
-            resume_state["policy_checkpoint_name"]
-          ).policy(policy_args=[self.buffers[0]])
+            self.agent = self.policy_store.get_policy(
+                resume_state["policy_checkpoint_name"]
+            ).policy(policy_args=[self.buffers[0]])
 
         # TODO: this can be cleaned up
         self.agent.is_recurrent = hasattr(self.agent, "lstm")
@@ -181,7 +186,7 @@ class CleanPuffeRL:
             self.agent.parameters(), lr=self.learning_rate, eps=1e-5
         )
         if "optimizer_state_dict" in resume_state:
-          self.optimizer.load_state_dict(resume_state["optimizer_state_dict"])
+            self.optimizer.load_state_dict(resume_state["optimizer_state_dict"])
 
         ### Allocate Storage
         next_obs, next_done, next_lstm_state = [], [], []
@@ -219,7 +224,9 @@ class CleanPuffeRL:
                 self.batch_size + 1, *self.buffers[0].single_observation_space.shape
             ).to("cpu" if self.cpu_offload else self.device),
             actions=torch.zeros(
-                self.batch_size + 1, *self.buffers[0].single_action_space.shape, dtype=int
+                self.batch_size + 1,
+                *self.buffers[0].single_action_space.shape,
+                dtype=int,
             ).to(self.device),
             logprobs=torch.zeros(self.batch_size + 1).to(self.device),
             rewards=torch.zeros(self.batch_size + 1).to(self.device),
@@ -262,12 +269,15 @@ class CleanPuffeRL:
     def evaluate(self, show_progress=False):
         # Pick new policies for the policy pool
         # TODO: find a way to not switch mid-stream
-        self.policy_pool.update_policies({
-            p.name: p.policy(
-                policy_args=[self.buffers[0]],
-                device=self.device,
-            ) for p in self.policy_store.select_policies(self.policy_selector)
-        })
+        self.policy_pool.update_policies(
+            {
+                p.name: p.policy(
+                    policy_args=[self.buffers[0]],
+                    device=self.device,
+                )
+                for p in self.policy_store.select_policies(self.policy_selector)
+            }
+        )
 
         allocated_torch = torch.cuda.memory_allocated(self.device)
         allocated_cpu = self.process.memory_info().rss
@@ -294,11 +304,11 @@ class CleanPuffeRL:
 
             i = self.policy_pool.update_scores(i, "return")
 
-            '''
+            """
             for profile in self.buffers[buf].profile():
                 for k, v in profile.items():
                     performance[k].append(v["delta"])
-            '''
+            """
 
             o = torch.Tensor(o)
             if not self.cpu_offload:
@@ -340,7 +350,7 @@ class CleanPuffeRL:
             # Index alive mask with policy pool idxs...
             # TODO: Find a way to avoid having to do this
             if self.selfplay_learner_weight > 0:
-              alive_mask = np.array(alive_mask) * self.policy_pool.learner_mask
+                alive_mask = np.array(alive_mask) * self.policy_pool.learner_mask
 
             for idx in np.where(alive_mask)[0]:
                 if ptr == self.batch_size + 1:
@@ -359,7 +369,7 @@ class CleanPuffeRL:
                 ptr += 1
                 progress_bar.update(1)
 
-            '''
+            """
             for ii in i:
                 if not ii:
                     continue
@@ -372,7 +382,7 @@ class CleanPuffeRL:
                             stats[name].append(stat)
                         except:
                             continue
-            '''
+            """
 
             for policy_name, policy_i in i.items():
                 for agent_i in policy_i:
@@ -381,7 +391,7 @@ class CleanPuffeRL:
 
                     for name, stat in unroll_nested_dict(agent_i):
                         infos[policy_name][name].append(stat)
-                        if 'Task_eval_fn' in name:
+                        if "Task_eval_fn" in name:
                             # Temporary hack for NMMO competition
                             continue
                         try:
@@ -391,14 +401,14 @@ class CleanPuffeRL:
                             continue
 
         if self.policy_pool.scores and self.policy_ranker is not None:
-          self.policy_ranker.update_ranks(
-              self.policy_pool.scores,
-              wandb_policies=[self.policy_pool._learner_name]
-              if self.wandb_entity
-              else [],
-              step=self.global_step,
-          )
-          self.policy_pool.scores = {}
+            self.policy_ranker.update_ranks(
+                self.policy_pool.scores,
+                wandb_policies=[self.policy_pool._learner_name]
+                if self.wandb_entity
+                else [],
+                step=self.global_step,
+            )
+            self.policy_pool.scores = {}
 
         env_sps = int(agent_steps_collected / env_step_time)
         inference_sps = int(padded_steps_collected / inference_time)
@@ -410,7 +420,7 @@ class CleanPuffeRL:
                     f"Env SPS: {env_sps}",
                     f"Inference SPS: {inference_sps}",
                     f"Agent Steps: {agent_steps_collected}",
-                    *[f"{k}: {np.mean(v):.2f}" for k, v in stats['learner'].items()],
+                    *[f"{k}: {np.mean(v):.2f}" for k, v in stats["learner"].items()],
                 ]
             )
         )
@@ -428,7 +438,7 @@ class CleanPuffeRL:
                         f"performance/env/{k}": np.mean(v)
                         for k, v in performance.items()
                     },
-                    **{f"charts/{k}": np.mean(v) for k, v in stats['learner'].items()},
+                    **{f"charts/{k}": np.mean(v) for k, v in stats["learner"].items()},
                     "charts/reward": float(torch.mean(data.rewards)),
                     "agent_steps": self.global_step,
                     "global_step": self.global_step,
@@ -600,13 +610,17 @@ class CleanPuffeRL:
 
                 if self.record_loss:
                     with open(self.loss_file, "a") as f:
-                        print(f"# mini batch ({epoch}, {mb}) -- pg_loss:{pg_loss.item():.4f}, value_loss:{v_loss.item():.4f}, " + \
-                              f"entropy:{entropy_loss.item():.4f}, approx_kl: {approx_kl.item():.4f}",
-                                file=f)
+                        print(
+                            f"# mini batch ({epoch}, {mb}) -- pg_loss:{pg_loss.item():.4f}, value_loss:{v_loss.item():.4f}, "
+                            + f"entropy:{entropy_loss.item():.4f}, approx_kl: {approx_kl.item():.4f}",
+                            file=f,
+                        )
                     with open(self.action_file, "a") as f:
-                        print(f"# mini batch ({epoch}, {mb}) -- pg_loss:{pg_loss.item():.4f}, value_loss:{v_loss.item():.4f}, " + \
-                              f"entropy:{entropy_loss.item():.4f}, approx_kl: {approx_kl.item():.4f}",
-                                file=f)
+                        print(
+                            f"# mini batch ({epoch}, {mb}) -- pg_loss:{pg_loss.item():.4f}, value_loss:{v_loss.item():.4f}, "
+                            + f"entropy:{entropy_loss.item():.4f}, approx_kl: {approx_kl.item():.4f}",
+                            file=f,
+                        )
                         atn_list = mb_actions.cpu().numpy().tolist()
                         for atns in atn_list:
                             for atn in atns:
@@ -642,10 +656,12 @@ class CleanPuffeRL:
 
         if self.record_loss:
             with open(self.loss_file, "a") as f:
-                print(f"Epoch -- policy_loss:{pg_loss.item():.4f}, value_loss:{v_loss.item():.4f}, ",
-                      f"entropy:{entropy_loss.item():.4f}, approx_kl:{approx_kl.item():.4f}",
-                      f"clipfrac:{np.mean(clipfracs):.4f}, explained_var:{explained_var:.4f}",
-                      file=f)
+                print(
+                    f"Epoch -- policy_loss:{pg_loss.item():.4f}, value_loss:{v_loss.item():.4f}, ",
+                    f"entropy:{entropy_loss.item():.4f}, approx_kl:{approx_kl.item():.4f}",
+                    f"clipfrac:{np.mean(clipfracs):.4f}, explained_var:{explained_var:.4f}",
+                    file=f,
+                )
 
         # TRY NOT TO MODIFY: record rewards for plotting purposes
         if self.wandb_entity:
@@ -667,7 +683,7 @@ class CleanPuffeRL:
             )
 
         if self.update % self.checkpoint_interval == 1 or self.done_training():
-           self._save_checkpoint()
+            self._save_checkpoint()
 
     def done_training(self):
         return self.update >= self.total_updates

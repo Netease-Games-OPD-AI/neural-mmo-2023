@@ -41,6 +41,7 @@ for event_code in essential_events:
 ##############################################################################
 # Create training tasks using custom evaluation functions
 
+
 def PracticeEating(gs, subject):
     """The progress, the max of which is 1, should
     * increase small for each eating
@@ -55,11 +56,14 @@ def PracticeEating(gs, subject):
         progress += 0.3
     return norm(progress)  # norm is a helper function to normalize the value to [0, 1]
 
+
 curriculum.append(TaskSpec(eval_fn=PracticeEating, eval_fn_kwargs={}))
+
 
 # You can also use pre-built eval functions to define your own eval functions
 def PracticeInventoryManagement(gs, subject, space, num_tick):
     return norm(InventorySpaceGE(gs, subject, space) * TickGE(gs, subject, num_tick))
+
 
 for space in [2, 4, 8]:
     curriculum.append(
@@ -74,6 +78,7 @@ if __name__ == "__main__":
     # Import the custom curriculum
     print("------------------------------------------------------------")
     import curriculum_tutorial  # which is this file
+
     CURRICULUM = curriculum_tutorial.curriculum
     print("The number of training tasks in the curriculum:", len(CURRICULUM))
 
@@ -96,6 +101,7 @@ if __name__ == "__main__":
     CURRICULUM_FILE_PATH = "custom_curriculum_with_embedding.pkl"
     with open(CURRICULUM_FILE_PATH, "wb") as f:
         import dill
+
         dill.dump(CURRICULUM, f)
     print("All training tasks are picklable.")
 
@@ -105,6 +111,7 @@ if __name__ == "__main__":
     print("------------------------------------------------------------")
     print("Generating the task spec with embedding file ...")
     from task_encoder import TaskEncoder
+
     LLM_CHECKPOINT = "Salesforce/codegen25-7b-instruct"
 
     # Get the task embeddings for the training tasks and save to file
@@ -117,8 +124,11 @@ if __name__ == "__main__":
     # These lines are the same as the RL track. If these don't run, please see train.py
     from reinforcement_learning import config
     from train import setup_env
+
     args = config.create_config(config.Config)
-    args.tasks_path = CURRICULUM_FILE_PATH  # This is the curriculum file saved by the task encoder
+    args.tasks_path = (
+        CURRICULUM_FILE_PATH  # This is the curriculum file saved by the task encoder
+    )
 
     # Remove below lines if you want to use the default training config
     local_mode = True
@@ -149,12 +159,16 @@ if __name__ == "__main__":
                 reward_signal_count = []
                 for sub_list in infos[key]:
                     for prog, rcnt in sub_list:
-                        completed.append(int(prog>=1)) # progress >= 1 is considered task complete
+                        completed.append(
+                            int(prog >= 1)
+                        )  # progress >= 1 is considered task complete
                         max_progress.append(prog)
                         reward_signal_count.append(rcnt)
-                print(f"{key} -- task tried: {len(completed)}, completed: {sum(completed)}, " +
-                      f"avg max progress: {sum(max_progress)/len(max_progress):.3f}, " +
-                      f"avg reward signal count: {sum(reward_signal_count)/len(reward_signal_count):.3f}")
+                print(
+                    f"{key} -- task tried: {len(completed)}, completed: {sum(completed)}, "
+                    + f"avg max progress: {sum(max_progress)/len(max_progress):.3f}, "
+                    + f"avg reward signal count: {sum(reward_signal_count)/len(reward_signal_count):.3f}"
+                )
 
             print("------------------------------------------------------------")
             print("The tutorial is done.")
